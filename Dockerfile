@@ -21,9 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python
 
-# Pip + torch (matching CUDA 13.x — required by current ComfyUI which imports torchaudio with cu130 deps)
-RUN pip install --upgrade pip --break-system-packages && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 --break-system-packages
+# Torch matching CUDA 13.x (required by current ComfyUI which imports torchaudio with cu130 deps).
+# --break-system-packages because Ubuntu 24.04 has PEP 668 protection.
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 --break-system-packages
 
 # ComfyUI
 WORKDIR /opt
