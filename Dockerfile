@@ -7,7 +7,7 @@
 # Push:  docker push <USER>/comfyui-flux:latest
 # Use:   set CONTAINER_IMAGE in salad_pipeline.py to "<USER>/comfyui-flux:latest"
 
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -21,20 +21,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# Pip + torch (matching CUDA 12.6)
-RUN pip install --upgrade pip && \
-    pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+# Pip + torch (matching CUDA 13.x — required by current ComfyUI which imports torchaudio with cu130 deps)
+RUN pip install --upgrade pip --break-system-packages && \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 --break-system-packages
 
 # ComfyUI
 WORKDIR /opt
 RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git
 WORKDIR /opt/ComfyUI
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt --break-system-packages
 
 # Custom node: GGUF support (for Flux Q4 quantized models)
 WORKDIR /opt/ComfyUI/custom_nodes
 RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git \
-    && pip install --upgrade gguf
+    && pip install --upgrade gguf --break-system-packages
 
 # Models (baked into image so cold start has zero downloads)
 WORKDIR /opt/ComfyUI/models
