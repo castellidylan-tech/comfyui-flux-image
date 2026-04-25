@@ -1,0 +1,8 @@
+.env
+.salad_state.json
+ComfyUI_windows_portable/
+tools/
+models_staging/
+cloud_outputs/
+__pycache__/
+*.pyc
