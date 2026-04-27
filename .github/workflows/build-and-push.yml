@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
+      - 'apply_ipadapter_patches.py'
       - '.github/workflows/build-and-push.yml'
   workflow_dispatch:  # allow manual trigger from the Actions tab
 
