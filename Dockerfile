@@ -1,14 +1,19 @@
-# Custom ComfyUI + Flux + IP-Adapter image for cloud GPU sprite generation pipeline.
+# SDXL stack qualité max pour Vast 3090 24GB.
+# Pivoted from Flux Q4_K_S (which was a leftover from 4060 Ti 8GB constraint).
+# On a 24GB VRAM GPU there's no reason to quantize — full FP16 SDXL is the way.
 #
-# Strategy: bake EVERYTHING into the image so cold start = pull + start ComfyUI.
-# No runtime model downloads, no onstart scripts (they were 400-error-prone on Vast).
+# Stack :
+#   SDXL Base 1.0 FP16  + SDXL Refiner FP16 (qualité top-tier)
+#   ControlNet Union SDXL Pro Max (Xinsir, all-in-one : depth/canny/openpose/etc.)
+#   IP-Adapter Plus SDXL (H94, mature depuis 2 ans, marche out-of-the-box)
+#   PixelArtXL LoRA (au cas où — workflow par défaut ne l'utilise pas)
+#   ComfyUI-IPAdapter-Plus (custom node de cubiq, mature et maintenu)
 #
-# Total image size: ~28 GB (was 13 GB — added ControlNet 6.6GB + IP-Adapter 5.3GB + SigLIP 3.5GB + LoRA 0.3GB)
-# Pull time on Vast 3.4 Gb/s: ~2 min. On 800 Mb/s: ~5 min.
+# Image size estimée : ~24 GB
+# Pull time on Vast 800 Mb/s : ~4 min (vs 5-10 min pour Flux 28 GB)
 #
-# Build: docker build -t daigami/comfyui-flux:latest .
-# Push:  docker push daigami/comfyui-flux:latest
-# Use:   CONTAINER_IMAGE in vastai_pipeline.py is "daigami/comfyui-flux:latest"
+# Build: docker build -t daigami/comfyui-sdxl:latest .
+# Push:  docker push daigami/comfyui-sdxl:latest
 
 FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
@@ -24,8 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python
 
-# Torch matching CUDA 13.x (required by current ComfyUI which imports torchaudio with cu130 deps).
-# --break-system-packages because Ubuntu 24.04 has PEP 668 protection.
+# Torch CUDA 13.x
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 --break-system-packages
 
 # ComfyUI
@@ -34,59 +38,42 @@ RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git
 WORKDIR /opt/ComfyUI
 RUN pip install -r requirements.txt --break-system-packages
 
-# Custom node: GGUF support (for Flux Q4 quantized models)
+# Custom node: IP-Adapter Plus (cubiq) — mature SDXL IP-Adapter implementation
 WORKDIR /opt/ComfyUI/custom_nodes
-RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git \
-    && pip install --upgrade gguf --break-system-packages
+RUN git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus.git
 
-# Custom node: IP-Adapter for Flux (Shakker-Labs) + apply community patches PR #108
-# Maintainer unresponsive since 2025-06. PR #108 by redaah fixes ComfyUI v0.14+ compat.
-COPY apply_ipadapter_patches.py /opt/apply_ipadapter_patches.py
-RUN git clone --depth 1 https://github.com/Shakker-Labs/ComfyUI-IPAdapter-Flux.git \
-    && pip install einops==0.8.0 "transformers>=4.37.2" diffusers "sentencepiece>=0.2.0" "protobuf>=4.25.5" --break-system-packages \
-    && python3 /opt/apply_ipadapter_patches.py /opt/ComfyUI/custom_nodes/ComfyUI-IPAdapter-Flux
-
-# Models (baked into image so cold start has zero downloads)
+# Models — bake everything for self-contained image
 WORKDIR /opt/ComfyUI/models
 
-# Flux dev Q4_K_S GGUF (~6.6 GB) — main diffusion model
-RUN mkdir -p unet && cd unet && \
-    curl -L -o flux1-dev-Q4_K_S.gguf \
-    "https://huggingface.co/city96/FLUX.1-dev-gguf/resolve/main/flux1-dev-Q4_K_S.gguf?download=true"
+# SDXL Base 1.0 FP16 (~6.5 GB) — main checkpoint, top-tier quality
+RUN mkdir -p checkpoints && cd checkpoints && \
+    curl -L -o sd_xl_base_1.0.safetensors \
+    "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors?download=true"
 
-# Text encoders (T5xxl fp8 + CLIP-L)
-RUN mkdir -p text_encoders && cd text_encoders && \
-    curl -L -o t5xxl_fp8_e4m3fn.safetensors \
-    "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors?download=true" && \
-    curl -L -o clip_l.safetensors \
-    "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors?download=true"
+# SDXL Refiner 1.0 FP16 (~6.5 GB) — pour upscale qualité finale (optional in workflow but baked in)
+RUN cd checkpoints && \
+    curl -L -o sd_xl_refiner_1.0.safetensors \
+    "https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-1.0/resolve/main/sd_xl_refiner_1.0.safetensors?download=true"
 
-# VAE
-RUN mkdir -p vae && cd vae && \
-    curl -L -o flux_ae.safetensors \
-    "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/ae.safetensors?download=true"
-
-# LoRA umempart Modern Pixel Art (~344 MB) — UmeAiRT, MIT license
-RUN mkdir -p loras && cd loras && \
-    curl -L -o ume_modern_pixelart.safetensors \
-    "https://huggingface.co/UmeAiRT/FLUX.1-dev-LoRA-Modern_Pixel_art/resolve/main/ume_modern_pixelart.safetensors?download=true"
-
-# ControlNet Flux Union Pro (~6.6 GB) — Shakker-Labs (handles depth/canny/openpose)
+# ControlNet Union ProMax SDXL (Xinsir, ~2.5 GB) — handles depth/canny/openpose/scribble/normal/segmentation in one model
 RUN mkdir -p controlnet && cd controlnet && \
-    curl -L -o flux_union_pro.safetensors \
-    "https://huggingface.co/Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro/resolve/main/diffusion_pytorch_model.safetensors?download=true"
+    curl -L -o controlnet_union_sdxl_promax.safetensors \
+    "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors?download=true"
 
-# IP-Adapter Flux (~5.3 GB) — InstantX, flux-1-dev-non-commercial-license
-RUN mkdir -p ipadapter-flux && cd ipadapter-flux && \
-    curl -L -o ip-adapter.bin \
-    "https://huggingface.co/InstantX/FLUX.1-dev-IP-Adapter/resolve/main/ip-adapter.bin?download=true"
+# IP-Adapter Plus SDXL (H94, ~700 MB) — the Plus version transfers identity better than the basic
+RUN mkdir -p ipadapter && cd ipadapter && \
+    curl -L -o ip-adapter-plus_sdxl_vit-h.safetensors \
+    "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors?download=true"
 
-# SigLIP vision encoder for IP-Adapter (~3.5 GB safetensors + small config)
-RUN mkdir -p clip_vision/google--siglip-so400m-patch14-384 \
-    && cd clip_vision/google--siglip-so400m-patch14-384 \
-    && for f in model.safetensors config.json preprocessor_config.json tokenizer.json tokenizer_config.json special_tokens_map.json spiece.model; do \
-        curl -L -o "$f" "https://huggingface.co/google/siglip-so400m-patch14-384/resolve/main/$f?download=true"; \
-    done
+# CLIP-H/14 vision encoder (~2.5 GB) — required by ip-adapter-plus_*_vit-h
+RUN mkdir -p clip_vision && cd clip_vision && \
+    curl -L -o CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors \
+    "https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors?download=true"
+
+# PixelArtXL LoRA (Nerijs, ~150 MB) — optional, baked at low cost
+RUN mkdir -p loras && cd loras && \
+    curl -L -o pixel-art-xl.safetensors \
+    "https://huggingface.co/nerijs/pixel-art-xl/resolve/main/pixel-art-xl.safetensors?download=true"
 
 # Expose ComfyUI HTTP API port
 EXPOSE 8188

@@ -1,11 +1,10 @@
-name: Build and push ComfyUI+Flux Docker image
+name: Build and push ComfyUI+SDXL Docker image
 
 on:
   push:
     branches: [main]
     paths:
       - 'Dockerfile'
-      - 'apply_ipadapter_patches.py'
       - '.github/workflows/build-and-push.yml'
   workflow_dispatch:  # allow manual trigger from the Actions tab
 
@@ -37,5 +36,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: daigami/comfyui-flux:latest
+          tags: daigami/comfyui-sdxl:latest
           # No cache — first build needs full pull. Add caching later if iterating.
